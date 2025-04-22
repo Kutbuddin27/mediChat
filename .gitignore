@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+*.pyo
+
+# Virtual environment
+venv/
+env/
+
+# Flask specific
+instance/
+*.db
+
+# VSCode
+.vscode/
+
+# MacOS
+.DS_Store
+#node modules
+node_modules/

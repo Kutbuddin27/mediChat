@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathology AI Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Header with back button and profile info -->
+        <div class="chat-header">
+            <div class="back-button">
+                <span class="material-icons">arrow_back</span>
+            </div>
+            <div class="profile">
+                <div class="profile-image">
+                    <img src="{{ url_for('static', filename='logo.png') }}" alt="Pathology AI">
+                </div>
+                <div class="profile-name">Pathology AI Chatbot</div>
+            </div>
+            <button id="dark-mode-toggle" title="Toggle dark mode">
+                <span class="material-icons" id="dark-mode-icon">dark_mode</span>
+            </button>
+        </div>
+        
+        <!-- Chat messages area -->
+        <div class="chat-messages" id="chat-messages">
+            <div class="timestamp">Today</div>
+            <!-- Messages will be added here via JavaScript -->
+        </div>
+        
+        <!-- Chat input area -->
+        <div class="chat-input">
+            <button class="attach-button">
+                <span class="material-icons">add</span>
+            </button>
+            <input type="text" id="message-input" placeholder="Type a message">
+            <button id="send-button" class="send-button">
+                <span class="material-icons">send</span>
+            </button>
+            <button id="mic-button" class="mic-button">
+                <span class="material-icons">mic</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Audio recording elements -->
+    <div id="recording-indicator" class="recording-indicator hidden">
+        <div class="pulse"></div>
+        <span>Recording...</span>
+        <button id="stop-recording">Stop</button>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
