@@ -1,22 +1,23 @@
 from flask import Flask, render_template, request, jsonify, session
 import speech_recognition as sr
-from key_functionality import PathologyBot
 import os
 from google.generativeai import configure
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 import json
 from dotenv import load_dotenv
 import requests
 import logging
+from test import MedicalChatbot,get_or_create_user_bot  # Import the MedicalChatbot class
+import uuid
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24) # Required for using session
 
-translator = Translator()
+translator =    GoogleTranslator()
 
-# Function to initialize the bot with the API key
+# Function to initialize the medical bot
 def initialize_bot():
     api_key = os.getenv("google_api_key")
     if not api_key:
@@ -24,7 +25,7 @@ def initialize_bot():
         return None
     try:
         configure(api_key=api_key)
-        return PathologyBot(api_key)
+        return MedicalChatbot()  # Initialize the MedicalChatbot
     except Exception as e:
         print(f"Error initializing chatbot: {e}")
         return None
@@ -36,10 +37,14 @@ if bot:
 else:
     print("Bot initialization failed")
 
+# Store user conversation contexts
+user_contexts = {}
+
 @app.route('/')
 def index():
     if bot:
         session['language'] = 'en' # Default language
+        session['user_id'] = str(uuid.uuid4())
         return render_template('index.html')
     else:
         return "Error: google_api_key not set."
@@ -60,16 +65,21 @@ def translate_text(text, target_language):
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    user_id = "web_user"
+    user_id = session.get('user_id', 'web_user')  # <-- replace this logic if you want more dynamic IDs
     message = request.form.get('message', '').strip()
     language = session.get('language', 'en')
 
-    if not bot:
+    # Get the chatbot instance for this user
+    chatbot = get_or_create_user_bot(user_id)
+
+    if not chatbot:
         error_text = translate_text("Error: Chatbot not initialized", language)
         return jsonify({'response': {'text': error_text}})
 
-    bot_response = bot.get_response(user_id, message)
+    # Process the message using the user-specific chatbot
+    bot_response = chatbot.process_message(message)
 
+    # Try to parse a JSON-formatted response (with buttons)
     try:
         response_data = json.loads(bot_response)
         translated_text = translate_text(response_data.get('text', ''), language)
@@ -78,12 +88,14 @@ def chat():
         if 'buttons' in response_data:
             for btn in response_data['buttons']:
                 translated_buttons.append({
-                'text': translate_text(btn['text'], language),
-                'value': btn['value']
+                    'text': translate_text(btn['text'], language),
+                    'value': btn['value']
                 })
 
         return jsonify({'response': {'text': translated_text, 'buttons': translated_buttons}})
-    except json.JSONDecodeError:
+    
+    except (json.JSONDecodeError, TypeError):
+        # If not JSON or response is plain text
         translated_text = translate_text(bot_response, language)
         return jsonify({'response': {'text': translated_text}})
 
@@ -108,7 +120,7 @@ def speech():
             if language != 'en':
                 message = translate_text(message, 'en')
 
-            response = bot.get_response("web_user", message)
+            response = bot.process_message(message)
 
             if language != 'en':
                 response = translate_text(response, language)
@@ -138,30 +150,37 @@ gupshup_file_handler.setFormatter(formatter)
 if not gupshup_logger.hasHandlers():
     gupshup_logger.addHandler(gupshup_file_handler)
 
+recent_messages = {}
+
 @app.route('/gupshup_webhook', methods=['POST'])
 def gupshup_webhook():
     try:
-        headers = dict(request.headers)
-        gupshup_logger.info("Headers: %s", headers)
-
         data = request.get_json(force=True, silent=True)
-        if data is None:
-            gupshup_logger.warning("No JSON payload received.")
-            return jsonify({"status": "error", "message": "No JSON data received"}), 400
 
-        gupshup_logger.info("Incoming JSON Payload: %s", data)
+        payload = data.get("payload", {}).get("payload", {})
+        message = payload.get("text", "")
+        user_phone = data.get("payload", {}).get("sender", {}).get("phone", "")  # This is the user
 
-        # Optional: Extract specific fields
-        phone = data.get("payload", {}).get("sender", {}).get("phone")
-        message = data.get("payload", {}).get("payload", {}).get("text")
-        gupshup_logger.info("Phone: %s | Message: %s", phone, message)
+        if not user_phone or not message:
+            return jsonify({"status": "error", "message": "Missing phone or message"}), 400
 
-        return jsonify({"status": "success"}), 200
+        # ✅ Prevent duplicate replies
+        if recent_messages.get(user_phone) == message:
+            return jsonify({"status": "duplicate_ignored"}), 200
+
+        recent_messages[user_phone] = message
+
+        # ✅ Use user_phone to maintain unique session
+        chatbot = get_or_create_user_bot(user_phone)
+
+        response = chatbot.process_message(message)
+
+        if response:
+            send_reply_to_gupshup(user_phone, response)
+        return '', 200
 
     except Exception as e:
-        gupshup_logger.error("Error in webhook: %s", str(e), exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 # 🟢 Send Reply to Gupshup Function
 def send_reply_to_gupshup(phone, message):
@@ -185,7 +204,7 @@ def send_reply_to_gupshup(phone, message):
 
     try:
         r = requests.post(GUPSHUP_API_URL, data=payload, headers=headers)
-        print(f"Gupshup sent: {r.status_code}, {r.text}")
+        print(f"Gupshup sent: {r.text}")
     except Exception as e:
         print(f"Failed to send message to Gupshup: {e}")
 

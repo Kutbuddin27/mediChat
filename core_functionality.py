@@ -28,7 +28,7 @@ class Database:
         # Load credentials from service account file
         # You'll need to create this JSON file from Google Cloud Console
         credentials = Credentials.from_service_account_file(
-            'medical-chatbot-457209-8fa9b5206528.json', 
+            'medichat-457610-72b7fae1ad7e.json', 
             scopes=SCOPES
         )
         

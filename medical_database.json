@@ -1,0 +1,43 @@
+{
+  "patients": {
+    "patient_20250423083816": {
+      "raw_info": "Please provide the patient's name and information you would like to store."
+    },
+    "patient_20250423104820": {
+      "raw_info": "The user's name and phone number are missing from the appointment booking. Please collect this information."
+    },
+    "patient_20250423105940": {
+      "raw_info": "Please provide the patient's name, date of birth, address, phone number, and any relevant medical history.\n```"
+    },
+    "patient_20250423112421": {
+      "raw_info": "The user wants to store their information as they are a new patient."
+    },
+    "patient_20250423122821": {
+      "raw_info": "Patient Name: Kutbuddin"
+    }
+  },
+  "appointments": {
+    "appt_20250423104750": {
+      "doctor_id": "dr_smith",
+      "patient_id": "unknown_patient",
+      "date": "Doctor: Dr. Smith, Date: 2025-04-25",
+      "time": "11:00 AM",
+      "reason": "Doctor: Dr. Smith, Date: 2025-04-25, Time: 11:00 AM, Reason: Discussing recent reports",
+      "status": "confirmed"
+    }
+  },
+  "doctors": {
+    "dr_smith": {
+      "name": "Dr. Batra",
+      "specialty": "General Practice"
+    },
+    "dr_jones": {
+      "name": "Dr. Momin",
+      "specialty": "Cardiology"
+    },
+    "dr_patel": {
+      "name": "Dr. Shah",
+      "specialty": "Pediatrics"
+    }
+  }
+}

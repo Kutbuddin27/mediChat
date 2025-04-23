@@ -8,7 +8,7 @@ __pycache__/
 # Virtual environment
 venv/
 env/
-
+myenv/
 # Flask specific
 instance/
 *.db
@@ -20,3 +20,6 @@ instance/
 .DS_Store
 #node modules
 node_modules/
+#Env module
+.env
+medical_docs/
