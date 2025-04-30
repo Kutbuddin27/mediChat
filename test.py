@@ -108,58 +108,177 @@ class MedicalPromptManager:
 
 # ---- Database Integration ----
 class MedicalDatabase:
-    def __init__(self, db_path: str = "medical_database.json"):
-        self.db_path = db_path
+    def __init__(self, credentials_path="medichat-457610-72b7fae1ad7e.json"):
+        """Initialize database with Google Sheets connection"""
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        
+        # Use credentials to create a client to interact with Google Drive API
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        credentials = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
+        client = gspread.authorize(credentials)
+        
+        # Open the spreadsheet (create if it doesn't exist)
+        try:
+            self.spreadsheet = client.open("PathologyDatabase")
+            print(f"Spreadsheet URL: {self.spreadsheet.url}")
+            print(f"Spreadsheet ID: {self.spreadsheet.id}")
+        except gspread.SpreadsheetNotFound:
+            self.spreadsheet = client.create("PathologyDatabase")
+            
+            # Create necessary worksheets
+            self.spreadsheet.add_worksheet(title="patients", rows=1000, cols=20)
+            self.spreadsheet.add_worksheet(title="appointments", rows=1000, cols=20)
+            self.spreadsheet.add_worksheet(title="doctors", rows=100, cols=10)
+            
+            # Initialize doctors worksheet with sample data
+            doctors_sheet = self.spreadsheet.worksheet("doctors")
+            doctors_sheet.append_row(["id", "name", "specialty"])
+            doctors_sheet.append_row(["dr_batra", "Dr. Batra", "General Practice"])
+            doctors_sheet.append_row(["dr_shah", "Dr. Shah", "Cardiology"])
+            doctors_sheet.append_row(["dr_momin", "Dr. Momin", "Pediatrics"])
+            self.spreadsheet.share('kapadiakutbuddin@gmail.com', perm_type='user', role='writer')
+        # Store worksheets
+        self.patients_sheet = self.spreadsheet.worksheet("patients")
+        self.appointments_sheet = self.spreadsheet.worksheet("appointments")
+        self.doctors_sheet = self.spreadsheet.worksheet("doctors")
+        
+        # Cache data for faster access
         self.data = self._load_db()
     
     def _load_db(self) -> Dict:
-        """Load the database from file or create a new one"""
-        if os.path.exists(self.db_path):
-            with open(self.db_path, 'r') as f:
-                return json.load(f)
-        else:
-            # Initialize with sample data
-            data = {
-                "patients": {},
-                "appointments": {},
-                "doctors": {
-                    "dr_smith": {"name": "Dr. Batra", "specialty": "General Practice"},
-                    "dr_jones": {"name": "Dr. Shah", "specialty": "Cardiology"},
-                    "dr_patel": {"name": "Dr. Momin", "specialty": "Pediatrics"}
+        """Load data from Google Sheets"""
+        # Initialize data structure
+        data = {"patients": {}, "appointments": {}, "doctors": {}}
+        
+        # Load doctors
+        doctors_data = self.doctors_sheet.get_all_records()
+        for doctor in doctors_data:
+            if "id" in doctor and doctor["id"]:
+                doctor_id = doctor["id"]
+                data["doctors"][doctor_id] = {
+                    "name": doctor.get("name", ""),
+                    "specialty": doctor.get("specialty", "")
                 }
-            }
-            self._save_db(data)
-            return data
+        
+        # Load patients
+        patients_data = self.patients_sheet.get_all_records()
+        for patient in patients_data:
+            if "id" in patient and patient["id"]:
+                patient_id = patient["id"]
+                data["patients"][patient_id] = {k: v for k, v in patient.items() if k != "id"}
+        
+        # Load appointments
+        appointments_data = self.appointments_sheet.get_all_records()
+        for appointment in appointments_data:
+            if "id" in appointment and appointment["id"]:
+                appointment_id = appointment["id"]
+                data["appointments"][appointment_id] = {k: v for k, v in appointment.items() if k != "id"}
+        
+        return data
     
     def _save_db(self, data=None):
-        """Save the current database to file"""
-        if data is None:
-            data = self.data
-        with open(self.db_path, 'w') as f:
-            json.dump(data, f, indent=2)
+        """Save specific data to Google Sheets (not typically needed as we update directly)"""
+        # This is a placeholder - we typically update the sheets directly in each method
+        pass
     
     def add_patient(self, patient_id: str, patient_data: Dict) -> bool:
         """Add a new patient to the database"""
-        if patient_id in self.data["patients"]:
-            return False  # Patient already exists
-        
+        # Update in-memory cache
         self.data["patients"][patient_id] = patient_data
-        self._save_db()
+
+        # Update Google Sheet
+        # First check if patient already exists
+        patient_ids = self.patients_sheet.col_values(1)
+        if patient_id in patient_ids:
+            # Update existing row
+            row_idx = patient_ids.index(patient_id) + 1
+            existing_headers = self.patients_sheet.row_values(1)
+
+            # Update each cell
+            for key, value in patient_data.items():
+                if key in existing_headers:
+                    col_idx = existing_headers.index(key) + 1
+                    self.patients_sheet.update_cell(row_idx, col_idx, value)
+        else:
+            # Add new row
+            # First ensure we have all necessary columns
+            headers = self.patients_sheet.row_values(1)
+            if not headers:
+                # Add headers if sheet is empty
+                headers = ["id"] + list(patient_data.keys())
+                self.patients_sheet.append_row(headers)
+            else:
+                # Add any missing columns
+                for key in patient_data:
+                    if key not in headers:
+                        headers.append(key)
+                        self.patients_sheet.update_cell(1, len(headers), key)
+
+            # Now add the data row
+            row = [patient_id]
+            for header in headers[1:]:  # Skip the ID column
+                row.append(patient_data.get(header, ""))
+            self.patients_sheet.append_row(row)
+
         return True
-    
+    def find_patient_id(self, name: str, phone: str) -> str:
+        """Find patient ID based on name and phone number"""
+        for pid, pdata in self.data["patients"].items():
+            if pdata.get("name") == name and pdata.get("phone") == phone:
+                return pid
+        return ""
+
     def get_patient(self, patient_id: str) -> Dict:
         """Get patient information"""
         return self.data["patients"].get(patient_id, {})
     
     def book_appointment(self, appointment_id: str, appointment_data: Dict) -> bool:
-        """Book a new appointment"""
-        if appointment_id in self.data["appointments"]:
-            return False  # Appointment ID already exists
-        
-        self.data["appointments"][appointment_id] = appointment_data
-        self._save_db()
-        return True
-    
+        """Book an appointment with improved error handling and validation"""
+        try:
+            if not appointment_id or not appointment_data:
+                print(f"ERROR: Invalid appointment data: id={appointment_id}, data={appointment_data}")
+                return False
+                
+            if appointment_id in self.data["appointments"]:
+                print(f"ERROR: Appointment ID {appointment_id} already exists")
+                return False
+            
+            # First update in-memory cache
+            self.data["appointments"][appointment_id] = appointment_data
+            
+            # Then update Google Sheet
+            print(f"Saving appointment {appointment_id} to Google Sheet")
+            
+            # Check for headers
+            headers = self.appointments_sheet.row_values(1)
+            if not headers:
+                headers = ["id"] + list(appointment_data.keys())
+                self.appointments_sheet.append_row(headers)
+                print(f"Created headers: {headers}")
+            else:
+                # Check for and add any missing columns
+                for key in appointment_data:
+                    if key not in headers:
+                        headers.append(key)
+                        col_idx = len(headers)
+                        self.appointments_sheet.update_cell(1, col_idx, key)
+                        print(f"Added missing column: {key}")
+            
+            # Prepare the row data
+            row = [appointment_id]
+            for h in headers[1:]:  # Skip the ID column
+                row.append(str(appointment_data.get(h, "")))  # Convert all values to string
+            
+            # Append the row
+            self.appointments_sheet.append_row(row)
+            print(f"Successfully added appointment row: {row}")
+            
+            return True
+        except Exception as e:
+            print(f"ERROR in book_appointment: {str(e)}")
+            return False
+
     def get_appointments(self, patient_id: str = None, date: str = None) -> List[Dict]:
         """Get appointments, filtered by patient ID and/or date"""
         appointments = []
@@ -191,49 +310,64 @@ class MedicalDatabase:
         available_slots = [slot for slot in all_slots if slot not in booked_slots]
         return available_slots
 
+    def save_partial_patient_data(self, patient_id: str, data: dict):
+        if patient_id not in self.data["patients"]:
+            self.data["patients"][patient_id] = {}
+        self.data["patients"][patient_id].update(data)
+
 
 # ---- Memory Component ----
 class MedicalChatMemory:
     def __init__(self):
+        """Initialize chat memory with conversation history and booking state"""
+        # For conversation memory
         self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
+            memory_key="chat_history", 
             return_messages=True
         )
-        self.current_patient_id = None
+        
+        # For booking workflow
         self.booking_state = {}
+        self.is_booking_active = False  # Flag to indicate booking flow is active
+        
+        # Current patient tracking
+        self.current_patient_id = None
     
-    def add_message(self, human_message: str, ai_message: str):
-        """Add a message pair to memory"""
-        self.memory.chat_memory.add_user_message(human_message)
-        self.memory.chat_memory.add_ai_message(ai_message)
-    
-    def get_chat_history(self) -> str:
-        """Get formatted chat history"""
-        return self.memory.load_memory_variables({})["chat_history"]
-    
-    def set_current_patient(self, patient_id: str):
-        """Set the current patient context"""
-        self.current_patient_id = patient_id
-    
-    def start_booking_flow(self, doctor_id: str = None):
-        """Start an appointment booking flow"""
+    def start_booking_flow(self):
+        """Start a new booking flow"""
         self.booking_state = {
             "in_progress": True,
-            "step": "select_doctor",
-            "doctor_id": doctor_id,
-            "date": None,
-            "time": None,
-            "reason": None
+            "step": "select_doctor",  # First step is always doctor selection
+            "started_at": datetime.now().isoformat()
         }
+        self.is_booking_active = True  # Set flag to true when booking starts
+        print("Booking flow started, LLM responses disabled")
     
     def update_booking_state(self, **kwargs):
-        """Update the current booking state"""
+        """Update the booking state with new information"""
         self.booking_state.update(kwargs)
     
     def clear_booking_state(self):
-        """Clear the booking flow state"""
+        """Clear the booking state"""
         self.booking_state = {}
-
+        self.is_booking_active = False  # Reset flag when booking ends
+        print("Booking flow ended, LLM responses re-enabled")
+    
+    def set_current_patient(self, patient_id):
+        """Set the current patient ID"""
+        self.current_patient_id = patient_id
+    
+    def add_message(self, user_message, bot_response):
+        """Add a message pair to memory"""
+        self.memory.chat_memory.add_user_message(user_message)
+        self.memory.chat_memory.add_ai_message(bot_response)
+    
+    def clear_memory(self):
+        """Clear conversation memory"""
+        self.memory.clear()
+        self.booking_state = {}
+        self.is_booking_active = False
+        self.current_patient_id = None
 
 # ---- Main Medical Chatbot Class ----
 class MedicalChatbot:
@@ -281,7 +415,7 @@ class MedicalChatbot:
                 description="Use this to look up information about a specific patient"
             )
         ]
-        
+  
         # Initialize agent
         self.agent = initialize_agent(
             tools=tools,
@@ -290,7 +424,7 @@ class MedicalChatbot:
             verbose=True,
             memory=self.memory.memory
         )
-    
+
     def _query_medical_knowledge(self, query: str) -> str:
         """Query the medical knowledge base for information"""
         relevant_docs = self.doc_handler.search_docs(query)
@@ -321,102 +455,284 @@ class MedicalChatbot:
         response = llm.invoke(prompt)
 
         return response.content
-    
+
+    def _validate_state_for_step(self, step: str, state: dict) -> bool:
+        if step == "select_date":
+            return "doctor_id" in state
+        if step == "select_time":
+            return "doctor_id" in state and "date" in state
+        if step == "collect_name":
+            return all(k in state for k in ["doctor_id", "date", "time"])
+        if step == "collect_phone":
+            return "name" in state
+        if step == "confirm":
+            return all(k in state for k in ["name", "phone", "doctor_id", "date", "time"])
+        return True
+
+    def _format_doctor_list(self, doctors: dict, doctor_options: dict) -> str:
+        doctor_list = []
+        for option, doc_id in doctor_options.items():
+            doc_info = doctors[doc_id]
+            doctor_list.append(f"{option}. {doc_info['name']} ({doc_info['specialty']})")
+        formatted_list = "\n".join(doctor_list)
+        return f"Okay! We have the following doctors available:\n\n{formatted_list}\n\nPlease select a doctor by typing the corresponding letter."
+
+    def reset_conversation(self):
+        """Reset the chatbot's memory to prevent hallucinations"""
+        self.memory.clear_memory()
+        # Re-initialize the retrieval chain with fresh memory
+        self.retrieval_chain = ConversationalRetrievalChain.from_llm(
+            llm=self.llm,
+            retriever=self.doc_handler.vector_store.as_retriever(),
+            memory=self.memory.memory
+        )
+        return "Memory has been cleared. Starting fresh conversation."
+                
     def _handle_booking(self, input_text: str) -> str:
-        """Handle appointment booking workflow"""
-        # If no booking in progress, start one
-        if not self.memory.booking_state.get("in_progress", False):
+        """Handle appointment booking workflow with strict hardcoded flow"""
+        # Check for direct booking start
+        if input_text.lower() == "start" or any(keyword in input_text.lower() for keyword in ["book", "appointment", "schedule", "see a doctor"]):
+            # Clear any existing booking state to start fresh
+            self.memory.clear_booking_state()
             self.memory.start_booking_flow()
             
-            # Get list of doctors
-            doctors = self.database.data["doctors"]
-            doctor_list = ", ".join([f"{d['name']} ({d['specialty']})" for d in doctors.values()])
+            # Log the start of a new booking
+            print(f"Starting new booking flow at {datetime.now()}")
             
-            return f"Let's book an appointment. We have the following doctors available: {doctor_list}. Which doctor would you like to see?"
+            # Get doctor list from database
+            doctors = self.database.data["doctors"]
+            options = {chr(65 + i): doc_id for i, doc_id in enumerate(doctors)}
+            self.memory.update_booking_state(doctor_options=options, step="select_doctor")
+            
+            # HARDCODED response for doctor selection
+            doctor_list = []
+            for option, doc_id in options.items():
+                doc_info = doctors[doc_id]
+                doctor_list.append(f"{option}. Dr. {doc_info['name']} ({doc_info['specialty']})")
+            
+            formatted_list = "\n".join(doctor_list)
+            return f"Let's book your appointment. Please select a doctor by typing the corresponding letter:\n\n{formatted_list}"
         
-        # Process booking flow based on current step
+        # Check if we have an active booking flow
+        if not self.memory.is_booking_active:
+            # This should not happen with our new flow control
+            self.memory.start_booking_flow()
+            
+            # Log the start of a new booking
+            print(f"WARNING: Booking function called without active flow. Starting at {datetime.now()}")
+            
+            doctors = self.database.data["doctors"]
+            options = {chr(65 + i): doc_id for i, doc_id in enumerate(doctors)}
+            self.memory.update_booking_state(doctor_options=options, step="select_doctor")
+            
+            # HARDCODED doctor selection prompt
+            doctor_list = []
+            for option, doc_id in options.items():
+                doc_info = doctors[doc_id]
+                doctor_list.append(f"{option}. Dr. {doc_info['name']} ({doc_info['specialty']})")
+            
+            formatted_list = "\n".join(doctor_list)
+            return f"Let's book your appointment. Please select a doctor by typing the corresponding letter:\n\n{formatted_list}"
+        
+        # Log the current state and input for debugging
         booking_state = self.memory.booking_state
+        print(f"Current booking state: {json.dumps(booking_state)}")
+        print(f"User input: {input_text}")
+        
+        # Get current step from state
         step = booking_state.get("step")
         
+        # STRICTLY SEQUENTIAL FLOW with hardcoded responses for each step
         if step == "select_doctor":
-            # Extract doctor from input (in production, use NLU)
+            # Check if user entered an option letter
+            input_letter = input_text.strip().upper()
+            doctor_options = booking_state.get("doctor_options", {})
+            
+            # Try to match by letter
+            if input_letter in doctor_options:
+                doc_id = doctor_options[input_letter]
+                doc_info = self.database.data["doctors"][doc_id]
+                
+                self.memory.update_booking_state(doctor_id=doc_id, step="select_date")
+                
+                # HARDCODED date selection prompt
+                tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                next_day = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+                next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+                return f"When would you like to book your appointment with Dr. {doc_info['name']}?\n\nAvailable dates are:\n- {tomorrow}\n- {next_day}\n- {next_week}\n\nPlease provide a date in YYYY-MM-DD format."
+            
+            # Try to match by doctor name
             for doc_id, doc_info in self.database.data["doctors"].items():
                 if doc_info["name"].lower() in input_text.lower():
                     self.memory.update_booking_state(doctor_id=doc_id, step="select_date")
+                    
+                    # HARDCODED date selection prompt
                     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
                     next_day = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
                     next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-                    return f"When would you like to book your appointment with {doc_info['name']}? We have availability on {tomorrow}, {next_day}, and {next_week}."
+                    return f"When would you like to book your appointment with Dr. {doc_info['name']}?\n\nAvailable dates are:\n- {tomorrow}\n- {next_day}\n- {next_week}\n\nPlease provide a date in YYYY-MM-DD format."
             
-            return "I'm sorry, I couldn't identify which doctor you'd like to see. Could you please specify the doctor's name clearly?"
+            # Neither option letter nor doctor name matched
+            # HARDCODED doctor selection retry prompt
+            doctors = self.database.data["doctors"]
+            options = booking_state.get("doctor_options", {})
+            doctor_list = []
+            for option, doc_id in options.items():
+                doc_info = doctors[doc_id]
+                doctor_list.append(f"{option}. Dr. {doc_info['name']} ({doc_info['specialty']})")
+            
+            formatted_list = "\n".join(doctor_list)
+            return f"I couldn't identify which doctor you'd like to see. Please select from the options below by entering the letter:\n\n{formatted_list}"
         
         elif step == "select_date":
-            # Simple date extraction (in production, use proper date parsing)
-            # Use a date in the format YYYY-MM-DD
-            if '-' in input_text:
-                date_parts = input_text.split('-')
-                if len(date_parts) == 3:
-                    selected_date = input_text.strip()
-                    doctor_id = booking_state.get("doctor_id")
-                    doctor_name = self.database.data["doctors"][doctor_id]["name"]
-                    
-                    available_slots = self.database.get_available_slots(doctor_id, selected_date)
-                    if not available_slots:
-                        return f"I'm sorry, there are no available slots for {doctor_name} on {selected_date}. Would you like to try another date?"
-                    
-                    slots_text = ", ".join(available_slots)
-                    self.memory.update_booking_state(date=selected_date, step="select_time")
-                    return f"For {selected_date} with {doctor_name}, we have the following slots available: {slots_text}. What time works for you?"
+            # Simple date extraction
+            if '-' in input_text and len(input_text.split('-')) == 3:
+                selected_date = input_text.strip()
+                doctor_id = booking_state.get("doctor_id")
+                doctor_name = self.database.data["doctors"][doctor_id]["name"]
+                
+                # HARDCODED time slots
+                available_slots = ["9:00 AM", "10:00 AM", "11:00 AM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"]
+                slots_text = "\n- " + "\n- ".join(available_slots)
+                
+                self.memory.update_booking_state(date=selected_date, step="select_time")
+                
+                # HARDCODED time selection prompt
+                return f"For {selected_date} with Dr. {doctor_name}, we have the following slots available:{slots_text}\n\nWhat time works for you?"
             
-            return "Please provide a date in the format YYYY-MM-DD, such as 2025-04-24."
+            # HARDCODED date format error prompt
+            return "Please provide a date in the format YYYY-MM-DD (for example, 2025-04-24)."
         
         elif step == "select_time":
-            # Extract time (in production, use better time parsing)
+            # Fixed time slots
             common_times = ["9:00 AM", "10:00 AM", "11:00 AM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"]
             selected_time = None
             
+            # Try to find the time in user input
             for time in common_times:
                 if time.lower() in input_text.lower():
                     selected_time = time
                     break
             
             if selected_time:
-                self.memory.update_booking_state(time=selected_time, step="confirm")
-                doctor_id = booking_state.get("doctor_id")
-                date = booking_state.get("date")
-                doctor_name = self.database.data["doctors"][doctor_id]["name"]
+                self.memory.update_booking_state(time=selected_time, step="collect_name")
                 
-                return f"You're booking an appointment with {doctor_name} on {date} at {selected_time}. What is the reason for your visit?"
+                # HARDCODED name collection prompt
+                return "Please enter your full name for booking:📄 "
             
-            return "Please select one of the available time slots mentioned earlier."
+            # HARDCODED time selection retry prompt
+            slots_text = "\n- " + "\n- ".join(common_times)
+            return f"Please select one of the following slots available time slots:{slots_text}"
+        
+        elif step == "collect_name":
+            name = input_text.strip()
+            if not name:
+                # HARDCODED name error prompt
+                return "Your name is required. Please enter your full name:"
+            
+            self.memory.update_booking_state(name=name, step="collect_phone")
+            
+            # Save partial patient data
+            patient_id = self.memory.current_patient_id or f"temp_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            self.memory.set_current_patient(patient_id)
+            self.database.save_partial_patient_data(patient_id, {"name": name})
+            
+            # HARDCODED phone collection prompt
+            return "Okay Please enter your phone number also📝:"
+        elif step == "collect_phone":
+            phone = input_text.strip()
+            if not phone:
+                # HARDCODED phone error prompt
+                return "Your phone number is required. Please enter your phone number📝:"
+            
+            self.memory.update_booking_state(phone=phone, step="confirm")
+            
+            # Update patient record with phone
+            patient_id = self.memory.current_patient_id
+            self.database.save_partial_patient_data(patient_id, {"phone": phone})
+            
+            # HARDCODED reason collection prompt
+            return "Lastly Please provide the reason for your visit to confirm your Appointment"
         
         elif step == "confirm":
-            # Store the reason for visit and confirm booking
-            self.memory.update_booking_state(reason=input_text, step="complete")
+            # Store the reason for visit
+            reason = input_text.strip()
+            self.memory.update_booking_state(reason=reason, step="complete")
+            
+            # Debug log
+            print('=== CONFIRMING APPOINTMENT ===')
+            print(f"Current booking state: {json.dumps(booking_state)}")
             
             # Generate appointment ID
-            appointment_id = f"appt_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            appointment_id = f"APPT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            # Get patient information
+            name = booking_state.get("name")
+            phone = booking_state.get("phone")
+            
+            if not name or not phone:
+                self.memory.clear_booking_state()
+                # HARDCODED error prompt
+                return "Missing patient information. Booking process has been reset. Please try again by asking to book an appointment."
+            
+            # Get or create patient ID
+            patient_id = self.memory.current_patient_id
+            if not patient_id:
+                patient_id = self.database.find_patient_id(name, phone)
+                
+                if not patient_id:
+                    patient_id = f"patient_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    patient_data = {
+                        "name": name,
+                        "phone": phone
+                    }
+                    self.database.add_patient(patient_id, patient_data)
+                    self.memory.set_current_patient(patient_id)
             
             # Create appointment data
             appointment_data = {
                 "doctor_id": booking_state.get("doctor_id"),
-                "patient_id": self.memory.current_patient_id or "unknown_patient",
+                "patient_id": patient_id,
                 "date": booking_state.get("date"),
                 "time": booking_state.get("time"),
-                "reason": booking_state.get("reason"),
+                "reason": reason,
+                "name": name,
+                "phone": phone,
                 "status": "confirmed"
             }
             
+            # Validate required fields
+            missing_fields = [f for f in ["doctor_id", "date", "time"] if not appointment_data.get(f)]
+            if missing_fields:
+                self.memory.clear_booking_state()
+                # HARDCODED missing fields prompt
+                return "Missing appointment details. Booking process has been reset. Please try again by asking to book an appointment."
+            
             # Store in database
-            self.database.book_appointment(appointment_id, appointment_data)
+            success = self.database.book_appointment(appointment_id, appointment_data)
+            if not success:
+                self.memory.clear_booking_state()
+                # HARDCODED db error prompt
+                return "System error: Unable to save appointment. Please try again later or contact our office directly."
             
             doctor_name = self.database.data["doctors"][booking_state.get("doctor_id")]["name"]
+            
+            # Clear booking state after successful save
             self.memory.clear_booking_state()
             
-            return f"Your appointment with {doctor_name} on {appointment_data['date']} at {appointment_data['time']} has been confirmed. Your appointment ID is {appointment_id}. We look forward to seeing you!"
+            # HARDCODED confirmation message with all details in a standardized format
+            return f"""Appointment Successfully Booked!🎉 
+
+        Appointment ID: {appointment_id}
+        Patient: {name}
+        Doctor: Dr. {doctor_name}
+        Date: {booking_state.get("date")}
+        Time: {booking_state.get("time")}
+        Phone: {phone}
+        Reason: {reason}
+
+        Thank you for booking with us. You will receive a confirmation text message shortly. If you need to reschedule or cancel, please contact us and reference your Appointment ID."""
         
-        return "I'm sorry, there was an issue with the booking process. Please try again."
-    
     def _store_patient_info(self, patient_info: str) -> str:
         """Store patient information in the database"""
         # In a real system, you'd use NER to extract structured information
@@ -479,9 +795,37 @@ class MedicalChatbot:
         return "I'm sorry, I couldn't find patient information. Please provide patient details first."
     
     def process_message(self, message: str) -> str:
-        """Process an incoming message and generate a response"""
+        """Process an incoming message with booking flow override"""
         try:
-            # Use the agent to determine the appropriate action
+            # Check for reset command
+            if message.lower().strip() in ["reset", "clear memory", "restart", "clear cache"]:
+                return self.reset_conversation()
+            
+            # Check for booking-specific reset
+            if message.lower().strip() in ["cancel booking", "stop booking"]:
+                self.memory.clear_booking_state()
+                return "Booking process canceled. How else can I help you today?"
+            
+            # Check for booking intent keywords
+            booking_keywords = ["book", "appointment", "schedule", "see a doctor", "visit"]
+            is_booking_request = any(keyword in message.lower() for keyword in booking_keywords)
+            
+            # If booking is active or this is a new booking request
+            if self.memory.is_booking_active or is_booking_request:
+                # If this is a new booking request and we're not already in a booking flow
+                if is_booking_request and not self.memory.is_booking_active:
+                    # Start booking flow directly
+                    return self._handle_booking("start")
+                
+                # If already in booking flow, continue with hardcoded flow
+                if self.memory.is_booking_active:
+                    response = self._handle_booking(message)
+                    
+                    # Store in memory but don't allow LLM to modify
+                    self.memory.add_message(message, response)
+                    return response
+            
+            # For non-booking related queries, use the agent
             response = self.agent.run(message)
             
             # Store the conversation
@@ -490,7 +834,12 @@ class MedicalChatbot:
             return response
         except Exception as e:
             # Provide a meaningful error message
-            return f"I apologize, but I encountered an error while processing your request: {str(e)}"
+            print(f"ERROR in process_message: {str(e)}")
+            if self.memory.is_booking_active:
+                self.memory.clear_booking_state()
+                return "There was an error with the booking system. Please try again by saying 'book appointment'."
+            else:
+                return f"I apologize, but I encountered an error: {str(e)}. You can type 'reset' to clear my memory if I'm confused."
 
 # Example usage
 if __name__ == "__main__":
@@ -510,6 +859,7 @@ if __name__ == "__main__":
                     break
                     
                 response = chatbot.process_message(user_input)
+                print(response['text'])
                 print(f"Chatbot: {response}")
         except KeyboardInterrupt:
             print("\nExiting chatbot demo...")
@@ -535,28 +885,7 @@ original_process_message = MedicalChatbot.process_message
 def enhanced_process_message(self, message):
     """Enhanced process_message that formats responses for UI compatibility"""
     response = original_process_message(self, message)
-    
-    # Check if the response has buttons (for appointment booking, etc.)
-    if hasattr(self, 'memory') and self.memory.booking_state.get('in_progress', False):
-        # If we're in a booking flow, we might want to format with buttons
-        step = self.memory.booking_state.get('step')
-        
-        # Example: for doctor selection step, we could add buttons
-        if step == "select_doctor":
-            doctors = self.database.data["doctors"]
-            buttons = []
-            for doc_id, doc_info in doctors.items():
-                buttons.append({
-                    "text": doc_info["name"],
-                    "value": doc_info["name"]
-                })
-            
-            # Format as a JSON response that your UI can understand
-            return json.dumps({
-                "text": response,
-                "buttons": buttons
-            })
-    
+
     return response
 
 # Apply the monkey patch
