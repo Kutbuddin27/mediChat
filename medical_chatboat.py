@@ -99,41 +99,6 @@ def chat():
         # If not JSON or response is plain text
         translated_text = translate_text(bot_response, language)
         return jsonify({'response': {'text': translated_text}})
-
-@app.route('/speech', methods=['POST'])
-def speech():
-    if 'audio' in request.files:
-        audio_file = request.files['audio']
-        language = session.get('language', 'en')
-
-        try:
-            r = sr.Recognizer()
-            with sr.AudioFile(audio_file) as source:
-                audio = r.record(source)
-            message = r.recognize_google(audio)
-
-            if message.lower().strip() in {'exit', 'bye', 'goodbye', 'quit'}:
-                return jsonify({'response': translate_text("Goodbye! Have a nice day.", language), 'transcript': message})
-
-            if not bot:
-                return jsonify({'response': translate_text("Error: Chatbot not initialized.", language), 'transcript': message})
-
-            if language != 'en':
-                message = translate_text(message, 'en')
-
-            response = bot.process_message(message)
-
-            if language != 'en':
-                response = translate_text(response, language)
-
-            return jsonify({'response': response, 'transcript': message})
-        except sr.UnknownValueError:
-            return jsonify({'response': translate_text("Could not understand audio", language), 'transcript': ""})
-        except sr.RequestError as e:
-            return jsonify({'response': translate_text(f"Speech recognition error: {e}", language), 'transcript': ""})
-    else:
-        return jsonify({'response': translate_text("No audio file received", session.get('language', 'en')), 'transcript': ""})
-
 # 🟢 Gupshup Webhook Endpoint
 # Create a custom logger for Gupshup
 gupshup_logger = logging.getLogger("GupshupWebhookLogger")
@@ -148,41 +113,62 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 gupshup_file_handler.setFormatter(formatter)
 
 # Add handler to the logger (only once)
-if not gupshup_logger.hasHandlers():
-    gupshup_logger.addHandler(gupshup_file_handler)
+gupshup_logger.addHandler(gupshup_file_handler)
+
+# Define common greeting patterns
+GREETING_PATTERNS = [
+    r'\b(?:hi|hii|hiii|hello|hey|howdy|greetings|namaste|good\s*(?:morning|afternoon|evening|day)|hola)\b',
+    r'\bstart\b',
+    r'\bmenu\b',
+    r'\bhelp\b'
+]
 
 recent_messages = {}
 @app.route('/gupshup_webhook', methods=['POST'])
 def gupshup_webhook():
     try:
         data = request.get_json(force=True, silent=True)
-        print("Data  :",data)
+        #print("Data  :",data)
         payload = data.get("payload", {}).get("payload", {})
-        print("Payload  :",payload) 
+        #print("Payload  :",payload) 
         message = payload.get("text", "") or payload.get("title") or ""
         message = message.strip().lower()
-        print("Message  :",message)
+        #print("Message  :",message)
         user_phone = data.get("payload", {}).get("sender", {}).get("phone", "")  # This is the user
         if not user_phone or not message:
             return jsonify({"status": "error", "message": "Missing phone or message"}), 400
+        
         # ✅ Prevent duplicate replies
         if recent_messages.get(user_phone) == message:
             return "", 200
         
+        print("User------>",user_phone)
         recent_messages[user_phone] = message
-        print("recent messages: ",recent_messages)
+        
+        # Check if the message is a greeting
+        is_greeting = any(re.search(pattern, message, re.IGNORECASE) for pattern in GREETING_PATTERNS)
+        
+        # If greeting is detected, send the global menu
+        if is_greeting:
+            send_global_menu(user_phone)
+            return '', 200
+        
+        # If not a greeting, proceed with normal flow
         # ✅ Use user_phone to maintain unique session
         chatbot = get_or_create_user_bot(user_phone)
-        response = chatbot.process_message(message)
-        print("gupshup webhook :",response)
+        response = chatbot.process_message(message, user_phone)
+        
+        # print("gupshup webhook :",response)
         if response:
             if "select a doctor" in response:
-                send_button(phone=user_phone,
-                body=response)
-            elif "YYYY-MM-DD" in response:
-                send_button(phone=user_phone,body=response)
-            elif "following slots available" in response:
-                send_button(phone=user_phone,body=response)
+                print("webhook doctor",response)
+                send_button(phone=user_phone, body=response)
+            elif "Y-M-D" in response:
+                send_button(phone=user_phone, body=response)
+            elif re.search(r"morning\s+or\s+evening\s+slot", response, re.IGNORECASE):
+                send_button(phone=user_phone, body=response)
+            elif "What time works for you?" in response:
+                send_button(phone=user_phone, body=response)
             else:
                 send_reply_to_gupshup(
                     phone=user_phone,
@@ -190,7 +176,98 @@ def gupshup_webhook():
                 )
         return '', 200
     except Exception as e:
+        gupshup_logger.error(f"Error in webhook: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+def send_global_menu(phone):
+    """
+    Send a global menu with options for the user to interact with
+    """
+    url = "https://api.gupshup.io/wa/api/v1/msg"
+    
+    payload = {
+        "message": json.dumps({
+            "type": "list",
+            "title": "🏥 Welcome to Apple Hospital",
+            "body": """
+                I'm your dedicated Medical Assistant, here to help you with all your healthcare needs. I can assist you with:
+
+            • Booking appointments with our specialists
+            • Providing information about medical procedures
+            • Answering general health questions
+            • Managing your patient information
+            
+                How may I assist you today? If you're looking to schedule an appointment or have medical queries, I'm here to help!
+                """,
+            "msgid": "list1",
+            "globalButtons": [{
+                "type": "text",
+                "title": "Menu"
+            }],
+            "items": [{
+                "title": "Available Services",
+                "subtitle": "How can we help you today?",
+                "options": [
+                    {
+                        "type": "text",
+                        "title": "Book an Appointment",
+                        "description": "Book an appointment if you need a consultation with our doctors",
+                        "postbackText": "book appointment"
+                    },
+                    {
+                        "type": "text",
+                        "title": "View my Appointments",
+                        "description": "See your currently booked appointments",
+                        "postbackText": "view appointments"
+                    },
+                    {
+                        "type": "text",
+                        "title": "Cancel Appointment",
+                        "description": "Cancel an existing appointment",
+                        "postbackText": "cancel appointment"
+                    },
+                    {
+                        "type": "text",
+                        "title": "Reschedule Appointments",
+                        "description": "Reschedule an existing appointment",
+                        "postbackText": "reschedule appointment"
+                    },
+                    {
+                        "type": "text",
+                        "title": "Other Medical Info",
+                        "description": "Learn about medical procedures and services",
+                        "postbackText": "medical info"
+                    },
+                    {
+                        "type": "text",
+                        "title": "New Patient",
+                        "description": "Register as a new patient",
+                        "postbackText": "new patient"
+                    }
+                ]
+            }]
+        }),
+        "channel": "whatsapp",
+        "source": os.getenv("gupshup_source"),
+        "destination": phone,
+        "src.name": os.getenv("gupshup_app_name")
+    }
+    
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "apikey": os.getenv("gupshup_api_key")
+    }
+
+    try:
+        response = requests.post(url, data=payload, headers=headers)
+        print(f"Global menu response: {response.text}")
+        gupshup_logger.info(f"Sent global menu to {phone}. Response: {response.status_code}")
+        return response
+    except Exception as e:
+        gupshup_logger.error(f"Failed to send global menu: {e}")
+        print(f"Failed to send global menu: {e}")
+        return None
 
 # 🟢 Send Reply to Gupshup Function with Template Message
 def send_reply_to_gupshup(phone, body):
@@ -276,23 +353,124 @@ def send_reply_to_gupshup(phone, body):
         print(f"Failed to send message to Gupshup: {e}")
         return None
 
-def send_button(phone,body):
+def send_button(phone, body):
     url = "https://api.gupshup.io/wa/api/v1/msg"
     message = ''
-    if "YYYY-MM-DD" in body:
+    print("send_button---->", body)
+    
+    # For date selection
+    if "Y-M-D" in body or re.search(r'\b[A-Z]\.\s+\w+,\s+\w+\s+\d+,\s+\d{4}\s+\(\d{4}-\d{2}-\d{2}\)', body):
+        # Extract all dates in YYYY-MM-DD format
         dates = re.findall(r'\d{4}-\d{2}-\d{2}', body)
-        message = "{\"type\":\"quick_reply\",\"msgid\":\"qr1\",\"content\":{\"type\":\"text\",\"header\":\"Okay! We have the following dates available:\",\"text\":\"Please select a date by typing the corresponding option.\"},\"options\":[{\"type\":\"text\",\"title\":\"%s\"},{\"type\":\"text\",\"title\":\"%s\"},{\"type\":\"text\",\"title\":\"%s\"}]}" % (dates[0],dates[1],dates[2])
-    elif "select a doctor" in body:
-        message = "{\"type\":\"quick_reply\",\"msgid\":\"qr1\",\"content\":{\"type\":\"text\",\"header\":\"Okay! We have the following doctors available:\",\"text\":\"Please select a doctor by typing the corresponding letter.\"},\"options\":[{\"type\":\"text\",\"title\":\"Dr. Batra\"},{\"type\":\"text\",\"title\":\"Dr. Shah\"},{\"type\":\"text\",\"title\":\"Dr. Momin\"}]}"
-    elif "the following slots available" in body:
-        message = "{\"type\":\"quick_reply\",\"msgid\":\"qr1\",\"content\":{\"type\":\"text\",\"header\":\"Okay! We have the following doctors available:\",\"text\":\"Please select a doctor by typing the corresponding letter.\"},\"options\":[{\"type\":\"text\",\"title\":\"10:00 AM\"},{\"type\":\"text\",\"title\":\"11:00 AM\"},{\"type\":\"text\",\"title\":\"12:00 PM\"}]}"        
+        
+        # Create options dynamically for all available dates
+        options = []
+        for date in dates:
+            options.append({"type": "text", "title": date})
+        
+        # Create the message JSON with dynamic options
+        message_data = {
+            "type": "quick_reply",
+            "msgid": "qr1",
+            "content": {
+                "type": "text",
+                "header": "Okay! We have the following dates available:",
+                "text": "Please select a date by typing the corresponding option."
+            },
+            "options": options
+        }
+        message = json.dumps(message_data)
+    
+    # For morning/evening selection
+    elif re.search(r'morning\s+or\s+evening\s+slot', body, re.IGNORECASE):
+        day = re.search(r'\d{4}-\d{2}-\d{2}', body)
+        
+        # Create options based on what's mentioned in the message
+        options = []
+        if "morning" in body.lower():
+            options.append({"type": "text", "title": "Morning"})
+        if "evening" in body.lower():
+            options.append({"type": "text", "title": "Evening"})
+            
+        message_data = {
+            "type": "quick_reply",
+            "msgid": "qr1",
+            "content": {
+                "type": "text",
+                "header": f"Select daytime on {day.group()}:",
+                "text": "Please select your preferred time of day."
+            },
+            "options": options
+        }
+        message = json.dumps(message_data)
+    
+    # For doctor selection
+    elif "select a doctor" in body.lower():
+        # Extract all doctors with their specialties
+        doctor_entries = re.findall(r'[A-Z]\.\s+(Dr\.\s+[A-Za-z]+(?:\s+[A-Za-z]+)*\s+\([A-Za-z\s\-]+\))', body)
+        
+        if not doctor_entries:
+            # Alternative pattern if the first one doesn't match
+            doctor_entries = re.findall(r'[A-Z]\.\s+(.*?)(?:\n|$)', body)
+        
+        # Try to extract specialization
+        specialization_match = re.search(r"You've selected ([A-Za-z\s\-]+)\.", body)
+        specialization = specialization_match.group(1) if specialization_match else "Specialist"
+        
+        # Create options for each available doctor
+        options = []
+        for entry in doctor_entries:
+            # Extract just the doctor name (without the letter option)
+            doctor_name = entry.strip()
+            options.append({"type": "text", "title": doctor_name[:20]})  # Limit to 20 chars for button
+        
+        message_data = {
+            "type": "quick_reply",
+            "msgid": "qr1",
+            "content": {
+                "type": "text",
+                "header": f"Great! Select a doctor in {specialization}:",
+                "text": "Select the doctor you prefer"
+            },
+            "options": options
+        }
+        message = json.dumps(message_data)
+    
+    # For time slot selection
+    elif "What time works for you?" in body:
+        # Extract all available time slots
+        times = re.findall(r'\b\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}\s*[APap][Mm]\b', body)
+
+        # Create options for each available time
+        options = []
+        for time in times:
+            options.append({"type": "text", "title": time})
+        
+        message_data = {
+            "type": "quick_reply",
+            "msgid": "qr1",
+            "content": {
+                "type": "text",
+                "header": "Okay! We have the following times available:",
+                "text": "Please select a time by typing the corresponding option."
+            },
+            "options": options
+        }
+        message = json.dumps(message_data)
+    
+    # If no pattern matches, don't send a button message
+    if not message:
+        print("No button pattern matched for message body")
+        return None
+    
     payload = {
         "message": message,
         "channel": "whatsapp",
         "source": os.getenv("gupshup_source"),
-        "destination": "919725193559",
+        "destination": phone,
         "src.name": os.getenv("gupshup_app_name")
     }
+    
     headers = {
         "accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -300,8 +478,8 @@ def send_button(phone,body):
     }
 
     response = requests.post(url, data=payload, headers=headers)
-    print(f"Gupshup response: {r.text}")
-    return r
+    print(f"Gupshup response: {response.text}")
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8585)
