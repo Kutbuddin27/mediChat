@@ -86,7 +86,7 @@ def chat():
         translated_text = translate_text(response_data.get('text', ''), language)
 
         translated_buttons = []
-        if 'buttons' in response_data:
+        if 'buttons' in response_data:                                       
             for btn in response_data['buttons']:
                 translated_buttons.append({
                     'text': translate_text(btn['text'], language),
@@ -161,7 +161,6 @@ def gupshup_webhook():
         # print("gupshup webhook :",response)
         if response:
             if "select a doctor" in response:
-                print("webhook doctor",response)
                 send_button(phone=user_phone, body=response)
             elif "Y-M-D" in response:
                 send_button(phone=user_phone, body=response)
@@ -196,7 +195,7 @@ def send_global_menu(phone):
             • Providing information about medical procedures
             • Answering general health questions
             • Managing your patient information
-            
+
                 How may I assist you today? If you're looking to schedule an appointment or have medical queries, I'm here to help!
                 """,
             "msgid": "list1",
@@ -241,7 +240,7 @@ def send_global_menu(phone):
                     {
                         "type": "text",
                         "title": "New Patient",
-                        "description": "Register as a new patient",
+                        "description": "Store patient information for new patients",
                         "postbackText": "new patient"
                     }
                 ]
@@ -475,8 +474,7 @@ def send_button(phone, body):
         "accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
         "apikey": os.getenv("gupshup_api_key")
-    }
-
+    } 
     response = requests.post(url, data=payload, headers=headers)
     print(f"Gupshup response: {response.text}")
     return response

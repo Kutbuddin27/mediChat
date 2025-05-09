@@ -971,7 +971,7 @@ class MedicalChatbot:
         Reason: {reason}
 
         Thank you for booking with us. You will receive a confirmation text message shortly. If you need to reschedule or cancel, please contact us and reference your Appointment ID."""
-
+ 
     def _view_appointments(self, phone: str) -> str:
         """Handler to view appointments by phone number (directly from appointments data)"""
         if not phone:
@@ -1184,28 +1184,46 @@ class MedicalChatbot:
             # Check if appointment is already cancelled
             if appointment.get("status") == "cancelled":
                 return f"Appointment {appointment_id} has been cancelled and cannot be rescheduled. Please book a new appointment."
-            
+            print("Reschedule appointment---->",appointment)
             # Check if appointment is in the past
             try:
                 appointment_date = appointment.get("date")
                 appointment_time = appointment.get("time")
                 
                 if appointment_date:
-                    # Try different time formats
+                    # Try different time formats including time range format
                     time_formats = [
-                        "%Y-%m-%d %H:%M:%S",  # 2025-05-03 14:00:00
-                        "%Y-%m-%d %I:%M %p",  # 2025-05-03 10:00 AM
-                        "%Y-%m-%d %I:%M%p",   # 2025-05-03 10:00AM
-                        "%Y-%m-%d %H:%M"      # 2025-05-03 14:00
+                        "%Y-%m-%d %H:%M:%S",      # 2025-05-03 14:00:00
+                        "%Y-%m-%d %I:%M %p",      # 2025-05-03 10:00 AM
+                        "%Y-%m-%d %I:%M%p",       # 2025-05-03 10:00AM
+                        "%Y-%m-%d %H:%M"          # 2025-05-03 14:00
                     ]
                     
                     appt_datetime = None
-                    for fmt in time_formats:
-                        try:
-                            appt_datetime = datetime.strptime(f"{appointment_date} {appointment_time}", fmt)
-                            break
-                        except ValueError:
-                            continue
+                    
+                    # Handle time range format (e.g., "11:00-11:15 AM")
+                    time_range_match = re.match(r'(\d{1,2}:\d{2})-\d{1,2}:\d{2}\s*(AM|PM|am|pm)?', appointment_time)
+                    if time_range_match:
+                        # Extract just the start time for comparison
+                        start_time = time_range_match.group(1)
+                        am_pm = time_range_match.group(2) or ""
+                        parsed_time = f"{start_time} {am_pm}".strip()
+                        
+                        # Try parsing with the extracted start time
+                        for fmt in ["%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M"]:
+                            try:
+                                appt_datetime = datetime.strptime(f"{appointment_date} {parsed_time}", fmt)
+                                break
+                            except ValueError:
+                                continue
+                    else:
+                        # Try standard formats
+                        for fmt in time_formats:
+                            try:
+                                appt_datetime = datetime.strptime(f"{appointment_date} {appointment_time}", fmt)
+                                break
+                            except ValueError:
+                                continue
                     
                     if appt_datetime and appt_datetime < datetime.now():
                         return f"Cannot reschedule appointment {appointment_id} as it has already passed."
@@ -1285,9 +1303,31 @@ class MedicalChatbot:
                 if not re.match(r'\d{4}-\d{2}-\d{2}', new_date):
                     return "Please provide the date in YYYY-MM-DD format (e.g., 2025-05-10)."
                 
+                # Handle time range format in new_time
+                time_to_check = new_time
+                time_range_match = re.match(r'(\d{1,2}:\d{2})-\d{1,2}:\d{2}\s*(AM|PM|am|pm)?', new_time)
+                if time_range_match:
+                    # Extract the start time for slot checking
+                    start_time = time_range_match.group(1)
+                    am_pm = time_range_match.group(2) or ""
+                    time_to_check = f"{start_time} {am_pm}".strip()
+                
                 # Check if the slot is available
                 available_slots = self._get_available_slots(doctor_id, new_date)
-                if new_time not in available_slots:
+                
+                # Normalize available slots for comparison
+                normalized_available_slots = []
+                for slot in available_slots:
+                    slot_match = re.match(r'(\d{1,2}:\d{2})-\d{1,2}:\d{2}\s*(AM|PM|am|pm)?', slot)
+                    if slot_match:
+                        # Extract start time for comparison
+                        start = slot_match.group(1)
+                        modifier = slot_match.group(2) or ""
+                        normalized_available_slots.append(f"{start} {modifier}".strip())
+                    else:
+                        normalized_available_slots.append(slot)
+                
+                if time_to_check not in available_slots and time_to_check not in normalized_available_slots:
                     return f"The slot at {new_time} on {new_date} is not available. Please select from: {', '.join(available_slots)}"
                 
                 # Update appointment in database
@@ -1383,8 +1423,8 @@ class MedicalChatbot:
                 booked_times.append(appt_data.get("time"))
         
         # Define time slots based on preference
-        morning_slots = ["9:00 AM", "10:00 AM", "11:00 AM"]
-        evening_slots = ["1:00 PM", "2:00 PM", "3:00 PM"]
+        morning_slots = ["10:45-11:00 AM", "11:00-11:15 AM", "11:15-11:30 AM"]
+        evening_slots = ["1:45-2:00 PM", "2:00-2:15 PM", "2:15-2:30 PM"]
         
         if time_preference == "morning":
             all_slots = morning_slots
@@ -1679,9 +1719,7 @@ if __name__ == "__main__":
         print(f"Error initializing the chatbot: {e}")
 
 user_sessions = {}
-
 # Original MedicalChatbot class remains unchanged, just add this function
-
 def get_or_create_user_bot(user_id):
     """Gets or creates a MedicalChatbot instance for a specific user"""
     if user_id not in user_sessions:
@@ -1697,7 +1735,6 @@ original_process_message = MedicalChatbot.process_message
 def enhanced_process_message(self, message: str, phone: Optional[str] = None) -> str:
     """Enhanced process_message that formats responses for UI compatibility"""
     response = original_process_message(self, message, phone)
-
     return response
 
 # Apply the monkey patch
