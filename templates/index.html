@@ -6,6 +6,32 @@
     <title>Pathology AI Chatbot</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        /* Add a floating Admin button */
+        .admin-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: #6200ea;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            padding: 15px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            z-index: 1000;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+
+        .admin-button:hover {
+            background-color: #3700b3;
+            transform: scale(1.1);
+        }
+
+        .admin-button .material-icons {
+            font-size: 28px;
+        }
+    </style>
 </head>
 <body>
     <div class="chat-container">
@@ -53,6 +79,12 @@
         <button id="stop-recording">Stop</button>
     </div>
 
+    <!-- Floating Admin button -->
+    <a href="{{ url_for('admin_login') }}" class="admin-button" title="Admin Panel">
+        <span class="material-icons">admin_panel_settings</span>
+    </a>    
+
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
+

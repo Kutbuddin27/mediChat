@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edit Appointment</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="container mt-5">
+    <h2>Edit Appointment</h2>
+    <form method="POST">
+        <div class="mb-3">
+            <label for="patient_name" class="form-label">Patient</label>
+            <input type="text" class="form-control" id="patient_name" name="patient_name" value="{{ appointment.name }}" required>
+            <input type="hidden" id="patient_id" name="patient_id" value="{{ appointment.patient_id }}">
+        </div>
+
+        <div class="mb-3">
+            <label for="doctor_id" class="form-label">Doctor</label>
+            <select class="form-select" id="doctor_id" name="doctor_id" required>
+                {% for did, doctor in doctors.items() %}
+                <option value="{{ did }}" {% if appointment.doctor_id == did %}selected{% endif %}>
+                    {{ doctor.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label for="date" class="form-label">Date</label>
+            <input type="date" class="form-control" id="date" name="date" value="{{ appointment.date }}" required>
+        </div>
+
+        <div class="mb-3">
+            <label for="time" class="form-label">Time</label>
+            <input type="text" class="form-control" id="time" name="time" value="{{ appointment.time }}" placeholder="HH:MM" required>
+        </div>
+
+        <div class="mb-3">
+            <label for="reason" class="form-label">Reason</label>
+            <textarea class="form-control" id="reason" name="reason">{{ appointment.reason }}</textarea>
+        </div>
+
+        <div class="mb-3">
+            <label for="status" class="form-label">Status</label>
+            <select class="form-select" id="status" name="status">
+                <option value="scheduled" {% if appointment.status == "scheduled" %}selected{% endif %}>Scheduled</option>
+                <option value="completed" {% if appointment.status == "completed" %}selected{% endif %}>Completed</option>
+                <option value="cancelled" {% if appointment.status == "cancelled" %}selected{% endif %}>Cancelled</option>
+            </select>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Update Appointment</button>
+        <a href="{{ url_for('admin_appointments') }}" class="btn btn-secondary">Cancel</a>
+    </form>
+</div>
+</body>
+</html>

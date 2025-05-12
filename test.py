@@ -1,6 +1,5 @@
 # Medical Chatbot with LangChain using Google Generative AI
 # Features: Document Handling, Prompt Management, Memory, Integrations
-
 import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
@@ -357,6 +356,88 @@ class MedicalDatabase:
             for header in headers[1:]:  # skip 'id'
                 row.append(data.get(header, ""))
             self.patients_sheet.append_row(row)
+            
+    def get_appointment(self, appointment_id: str) -> Dict:
+        """Get appointment information by ID"""
+        return self.data["appointments"].get(appointment_id, {})
+
+    def update_appointment(self, appointment_id: str, appointment_data: Dict) -> bool:
+        """Update an existing appointment"""
+        try:
+            if appointment_id not in self.data["appointments"]:
+                print(f"ERROR: Appointment ID {appointment_id} not found")
+                return False
+                
+            # Update in-memory cache
+            self.data["appointments"][appointment_id] = appointment_data
+            
+            # Update Google Sheet
+            appointment_ids = self.appointments_sheet.col_values(1)
+            if appointment_id in appointment_ids:
+                row_idx = appointment_ids.index(appointment_id) + 1
+                headers = self.appointments_sheet.row_values(1)
+                
+                # Update each cell in the row
+                for key, value in appointment_data.items():
+                    if key in headers:
+                        col_idx = headers.index(key) + 1
+                        self.appointments_sheet.update_cell(row_idx, col_idx, str(value))
+                
+                return True
+            else:
+                print(f"ERROR: Appointment ID {appointment_id} not found in sheet")
+                return False
+        except Exception as e:
+            print(f"ERROR in update_appointment: {str(e)}")
+            return False
+
+    def delete_appointment(self, appointment_id: str) -> bool:
+        """Delete an appointment by ID"""
+        try:
+            # Check if appointment exists
+            if appointment_id not in self.data["appointments"]:
+                print(f"ERROR: Appointment ID {appointment_id} not found")
+                return False
+                
+            # Remove from in-memory cache
+            del self.data["appointments"][appointment_id]
+            
+            # Remove from Google Sheet
+            appointment_ids = self.appointments_sheet.col_values(1)
+            if appointment_id in appointment_ids:
+                row_idx = appointment_ids.index(appointment_id) + 1
+                self.appointments_sheet.delete_rows(row_idx)
+                return True
+            else:
+                print(f"ERROR: Appointment ID {appointment_id} not found in sheet")
+                return False
+        except Exception as e:
+            print(f"ERROR in delete_appointment: {str(e)}")
+            return False
+
+    def delete_patient(self, patient_id: str) -> bool:
+        """Delete a patient by ID"""
+        try:
+            # Check if patient exists
+            if patient_id not in self.data["patients"]:
+                print(f"ERROR: Patient ID {patient_id} not found")
+                return False
+                
+            # Remove from in-memory cache
+            del self.data["patients"][patient_id]
+            
+            # Remove from Google Sheet
+            patient_ids = self.patients_sheet.col_values(1)
+            if patient_id in patient_ids:
+                row_idx = patient_ids.index(patient_id) + 1
+                self.patients_sheet.delete_rows(row_idx)
+                return True
+            else:
+                print(f"ERROR: Patient ID {patient_id} not found in sheet")
+                return False
+        except Exception as e:
+            print(f"ERROR in delete_patient: {str(e)}")
+            return False
 
 # ---- Memory Component ----
 class MedicalChatMemory:
@@ -1631,7 +1712,7 @@ class MedicalChatbot:
         except Exception as e:
             # Provide a meaningful error message
             print(f"ERROR in process_message: {str(e)}")
-            traceback.print_exc()  # Print full exception traceback
+            # traceback.print_exc()  # Print full exception traceback
             if self.memory.is_booking_active:
                 self.memory.clear_booking_state()
                 return "There was an error with the booking system. Please try again by saying 'book appointment'."

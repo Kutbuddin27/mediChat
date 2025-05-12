@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
 import speech_recognition as sr
 import os
 from google.generativeai import configure
@@ -10,6 +10,8 @@ import logging
 from test import MedicalChatbot,get_or_create_user_bot  # Import the MedicalChatbot class
 import uuid
 import re  
+from functools import wraps
+from datetime import datetime
 
 load_dotenv()
 
@@ -17,6 +19,8 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24) # Required for using session
 
 translator =    GoogleTranslator()
+ADMIN_USERNAME = os.getenv("admin_username")  # Set this in your .env file
+ADMIN_PASSWORD = os.getenv("admin_password")  # Change this to a strong password
 
 # Function to initialize the medical bot
 def initialize_bot():
@@ -40,6 +44,14 @@ else:
 
 # Store user conversation contexts
 user_contexts = {}
+# Admin login required decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'admin_logged_in' not in session or not session['admin_logged_in']:
+            return redirect(url_for('admin_login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.route('/')
 def index():
@@ -99,6 +111,261 @@ def chat():
         # If not JSON or response is plain text
         translated_text = translate_text(bot_response, language)
         return jsonify({'response': {'text': translated_text}})
+# Admin Routes
+@app.route('/admin')
+@login_required
+def admin_dashboard():
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        if not sample_chatbot or not hasattr(sample_chatbot, 'database'):
+            return "Error: Cannot access database"
+        
+        db = sample_chatbot.database
+        patients = db.data["patients"]
+        appointments = db.data["appointments"]
+        doctors = db.data["doctors"]
+
+        # Filter appointments to show only today's or future appointments
+        today = datetime.today().date()
+
+        upcoming_appointments = {}
+        for apt_id, apt_data in appointments.items():
+            try:
+                apt_date = datetime.strptime(apt_data['date'], '%Y-%m-%d').date()
+                if apt_date >= today:
+                    upcoming_appointments[apt_id] = apt_data
+            except Exception as e:
+                print(f"Error parsing appointment date for {apt_id}: {e}")
+
+        return render_template('admin_dashboard.html', 
+                            patients=patients, 
+                            appointments=upcoming_appointments,
+                            doctors=doctors)
+    except Exception as e:
+        return f"Error accessing database: {str(e)}"
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('Invalid credentials')
+    
+    return render_template('admin_login.html')
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin/patients')
+@login_required
+def admin_patients():
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        patients = db.data["patients"]
+        return render_template('admin_patients.html', patients=patients)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.route('/admin/appointments')
+@login_required
+def admin_appointments():
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        appointments = db.data["appointments"]
+        patients = db.data["patients"]
+        doctors = db.data["doctors"]
+
+        # Get today's date
+        today = datetime.today().date()
+
+        # Filter appointments: keep only those with date >= today
+        upcoming_appointments = {}
+        for apt_id, apt_data in appointments.items():
+            try:
+                apt_date = datetime.strptime(apt_data['date'], '%Y-%m-%d').date()
+                if apt_date >= today:
+                    upcoming_appointments[apt_id] = apt_data
+            except Exception as e:
+                print(f"Error parsing appointment date for {apt_id}: {e}")
+
+        return render_template('admin_appointments.html', 
+                                appointments=upcoming_appointments,
+                                patients=patients,
+                                doctors=doctors)
+    except Exception as e:
+        return f"Error: {str(e)}"
+        
+@app.route('/admin/edit_appointment/<appointment_id>', methods=['GET', 'POST'])
+@login_required
+def admin_edit_appointment(appointment_id):
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        appointment = db.get_appointment(appointment_id)
+        patients = db.data["patients"]
+        doctors = db.data["doctors"]
+
+        if request.method == 'POST':
+            updated_data = {
+                "patient_id": request.form.get('patient_id', ''),
+                "doctor_id": request.form.get('doctor_id', ''),
+                "date": request.form.get('date', ''),
+                "time": request.form.get('time', ''),
+                "reason": request.form.get('reason', ''),
+                "status": request.form.get('status', 'scheduled')
+            }
+            db.update_appointment(appointment_id, updated_data)
+            flash('Appointment updated successfully')
+            return redirect(url_for('admin_appointments'))
+
+        return render_template('admin_edit_appointment.html',
+                            appointment_id=appointment_id,
+                            appointment=appointment,
+                            patients=patients,
+                            doctors=doctors)
+    except Exception as e:
+        flash(f"Error: {str(e)}")
+        return redirect(url_for('admin_appointments'))
+@app.route('/admin/delete_appointment/<appointment_id>', methods=['POST'])
+@login_required
+def admin_delete_appointment(appointment_id):
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        db.delete_appointment(appointment_id)
+        flash('Appointment deleted successfully')
+    except Exception as e:
+        flash(f"Error deleting appointment: {str(e)}")
+    return redirect(url_for('admin_appointments'))
+
+@app.route('/admin/doctors')
+@login_required
+def admin_doctors():
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        doctors = db.data["doctors"]
+        return render_template('admin_doctors.html', doctors=doctors)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.route('/admin/add_patient', methods=['GET', 'POST'])
+@login_required
+def admin_add_patient():
+    if request.method == 'POST':
+        try:
+            sample_chatbot = get_or_create_user_bot("admin")
+            db = sample_chatbot.database
+            
+            # Generate a unique ID for the patient
+            patient_id = f"p_{uuid.uuid4().hex[:8]}"
+            
+            # Gather patient data from form
+            patient_data = {
+                "name": request.form.get('name', ''),
+                "age": request.form.get('age', ''),
+                "gender": request.form.get('gender', ''),
+                "phone": request.form.get('phone', ''),
+                "email": request.form.get('email', ''),
+                "address": request.form.get('address', ''),
+                "medical_history": request.form.get('medical_history', '')
+            }
+            
+            # Add patient to database
+            success = db.add_patient(patient_id, patient_data)
+            
+            if success:
+                flash('Patient added successfully')
+                return redirect(url_for('admin_patients'))
+            else:
+                flash('Failed to add patient')
+                
+        except Exception as e:
+            flash(f'Error: {str(e)}')
+    
+    return render_template('admin_add_patient.html')
+
+@app.route('/admin/add_appointment', methods=['GET', 'POST'])
+@login_required
+def admin_add_appointment():
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        patients = db.data["patients"]
+        doctors = db.data["doctors"]
+        
+        if request.method == 'POST':
+            # Generate a unique ID for the appointment
+            appointment_id = f"apt_{uuid.uuid4().hex[:8]}"
+            
+            # Gather appointment data from form
+            appointment_data = {
+                "patient_id": request.form.get('patient_id', ''),
+                "doctor_id": request.form.get('doctor_id', ''),
+                "date": request.form.get('date', ''),
+                "time": request.form.get('time', ''),
+                "reason": request.form.get('reason', ''),
+                "status": "scheduled"
+            }
+            
+            # Book appointment in database
+            success = db.book_appointment(appointment_id, appointment_data)
+            
+            if success:
+                flash('Appointment booked successfully')
+                return redirect(url_for('admin_appointments'))
+            else:
+                flash('Failed to book appointment')
+        
+        return render_template('admin_add_appointment.html', 
+                            patients=patients,
+                            doctors=doctors)
+    
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.route('/admin/edit_patient/<patient_id>', methods=['GET', 'POST'])
+@login_required
+def admin_edit_patient(patient_id):
+    try:
+        sample_chatbot = get_or_create_user_bot("admin")
+        db = sample_chatbot.database
+        
+        if request.method == 'POST':
+            # Gather updated patient data from form
+            patient_data = {
+                "name": request.form.get('name', ''),
+                "age": request.form.get('age', ''),
+                "gender": request.form.get('gender', ''),
+                "phone": request.form.get('phone', ''),
+                "email": request.form.get('email', ''),
+                "address": request.form.get('address', ''),
+                "medical_history": request.form.get('medical_history', '')
+            }
+            # Update patient in database
+            db.add_patient(patient_id, patient_data)  # The add_patient method updates if patient exists
+            flash('Patient updated successfully')
+            return redirect(url_for('admin_patients'))
+        
+        # Get current patient data for edit form
+        patient_data = db.get_patient(patient_id)
+        return render_template('admin_edit_patient.html', 
+                            patient_id=patient_id,
+                            patient=patient_data)
+    
+    except Exception as e:
+        flash(f'Error: {str(e)}')
+        return redirect(url_for('admin_patients'))
+
 # 🟢 Gupshup Webhook Endpoint
 # Create a custom logger for Gupshup
 gupshup_logger = logging.getLogger("GupshupWebhookLogger")
